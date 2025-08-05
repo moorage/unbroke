@@ -28,6 +28,10 @@ function App() {
   const [groupTouched, setGroupTouched] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [sortColumn, setSortColumn] = useState<keyof Transaction>(
+    "transaction_date"
+  );
+  const [sortDesc, setSortDesc] = useState(true);
 
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
@@ -135,7 +139,31 @@ function App() {
       memo,
       id,
     ]);
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, memo } : t))
+    );
   }
+
+  function handleSort(column: keyof Transaction) {
+    if (sortColumn === column) {
+      setSortDesc(!sortDesc);
+    } else {
+      setSortColumn(column);
+      setSortDesc(column === "transaction_date");
+    }
+  }
+
+  const sortedTransactions = [...transactions].sort((a, b) => {
+    const dir = sortDesc ? -1 : 1;
+    const col = sortColumn;
+    if (col === "amount") return dir * (a.amount - b.amount);
+    if (col === "transaction_date" || col === "post_date")
+      return (
+        dir *
+        (new Date(a[col]).getTime() - new Date(b[col]).getTime())
+      );
+    return dir * String(a[col] ?? "").localeCompare(String(b[col] ?? ""));
+  });
 
   return (
     <div className="p-4 space-y-4">
@@ -161,17 +189,39 @@ function App() {
         <table className="min-w-full border">
           <thead>
             <tr className="bg-gray-100">
-              <th className="p-2 border">Date</th>
-              <th className="p-2 border">Description</th>
-              <th className="p-2 border">Category</th>
+              <th
+                className="p-2 border cursor-pointer"
+                onClick={() => handleSort("transaction_date")}
+              >
+                Date
+              </th>
+              <th
+                className="p-2 border cursor-pointer"
+                onClick={() => handleSort("description")}
+              >
+                Description
+              </th>
+              <th
+                className="p-2 border cursor-pointer text-right"
+                onClick={() => handleSort("amount")}
+              >
+                Amount
+              </th>
+              <th
+                className="p-2 border cursor-pointer"
+                onClick={() => handleSort("category")}
+              >
+                Category
+              </th>
               <th className="p-2 border">Memo</th>
             </tr>
           </thead>
           <tbody>
-            {transactions.map((t) => (
+            {sortedTransactions.map((t) => (
               <tr key={t.id} className="border-t">
                 <td className="p-2 border">{t.transaction_date}</td>
                 <td className="p-2 border">{t.description}</td>
+                <td className="p-2 border text-right">{t.amount.toFixed(2)}</td>
                 <td className="p-2 border w-48">
                   <Select
                     value={t.category}
@@ -191,14 +241,7 @@ function App() {
                 </td>
                 <td className="p-2 border w-64">
                   <Input
-                    value={t.memo}
-                    onChange={(e) =>
-                      setTransactions((prev) =>
-                        prev.map((p) =>
-                          p.id === t.id ? { ...p, memo: e.target.value } : p
-                        )
-                      )
-                    }
+                    defaultValue={t.memo}
                     onBlur={(e) => updateMemo(t.id!, e.target.value)}
                   />
                 </td>
