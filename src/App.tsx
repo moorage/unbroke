@@ -22,12 +22,21 @@ interface Transaction {
   memo: string;
 }
 
+interface Rule {
+  keyword: string;
+  category: string;
+}
+
 function App() {
   const [name, setName] = useState("");
   const [group, setGroup] = useState("");
   const [groupTouched, setGroupTouched] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [newCategory, setNewCategory] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -36,12 +45,18 @@ function App() {
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
     const savedGroup = localStorage.getItem("group") || "";
+    const savedRules = JSON.parse(
+      localStorage.getItem("rules") || "[]"
+    ) as Rule[];
     if (savedName) setName(savedName);
     if (savedGroup) {
       setGroup(savedGroup);
       setGroupTouched(true);
     }
-    loadTransactions();
+    setRules(savedRules);
+    loadTransactions().then(() => {
+      if (savedRules.length) applyAllRules(savedRules);
+    });
   }, []);
 
   useEffect(() => {
@@ -55,14 +70,29 @@ function App() {
     localStorage.setItem("group", group);
   }, [group]);
 
+  useEffect(() => {
+    localStorage.setItem("categories", JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem("rules", JSON.stringify(rules));
+  }, [rules]);
+
   async function loadTransactions() {
+    setLoading(true);
     const db = await getDb();
     const rows = (await db.select<Transaction[]>(
       "SELECT * FROM transactions ORDER BY transaction_date DESC"
     )) as Transaction[];
     setTransactions(rows);
-    const cats = Array.from(new Set(rows.map((r) => r.category).filter(Boolean)));
+    const savedCats = JSON.parse(
+      localStorage.getItem("categories") || "[]"
+    ) as string[];
+    const cats = Array.from(
+      new Set([...savedCats, ...rows.map((r) => r.category).filter(Boolean)])
+    );
     setCategories(cats);
+    setLoading(false);
   }
 
   function dedupe(records: Transaction[]): Transaction[] {
@@ -118,7 +148,7 @@ function App() {
         ]);
       }
     }
-    await loadTransactions();
+    await applyAllRules();
   }
 
   async function updateCategory(id: number, category: string) {
@@ -142,6 +172,52 @@ function App() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === id ? { ...t, memo } : t))
     );
+  }
+
+  function addCategory() {
+    const cat = newCategory.trim();
+    if (!cat) return;
+    if (categories.some((c) => c.toLowerCase() === cat.toLowerCase())) return;
+    setCategories([...categories, cat]);
+    setNewCategory("");
+  }
+
+  async function deleteAllData() {
+    if (!confirm("Delete all data?")) return;
+    const db = await getDb();
+    await db.execute("DELETE FROM transactions");
+    setTransactions([]);
+  }
+
+  function addRule() {
+    if (!newRule.keyword || !newRule.category) return;
+    setRules([...rules, newRule]);
+    if (!categories.includes(newRule.category))
+      setCategories([...categories, newRule.category]);
+    setNewRule({ keyword: "", category: "" });
+  }
+
+  function updateRule(index: number, update: Partial<Rule>) {
+    setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...update } : r)));
+  }
+
+  function deleteRule(index: number) {
+    setRules((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function applyRule(rule: Rule) {
+    await applyAllRules([rule]);
+  }
+
+  async function applyAllRules(rulesToApply: Rule[] = rules) {
+    const db = await getDb();
+    for (const rule of rulesToApply) {
+      await db.execute(
+        "UPDATE transactions SET category = ? WHERE description LIKE ?",
+        [rule.category, `%${rule.keyword}%`]
+      );
+    }
+    await loadTransactions();
   }
 
   function handleSort(column: keyof Transaction) {
@@ -185,10 +261,105 @@ function App() {
       <div>
         <input type="file" accept=".csv" onChange={handleFile} />
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full border">
-          <thead>
-            <tr className="bg-gray-100">
+      <div className="flex items-center gap-2">
+        <Input
+          className="w-48"
+          placeholder="New category"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value)}
+        />
+        <button className="px-2 py-1 border rounded" onClick={addCategory}>
+          Add Category
+        </button>
+      </div>
+      <div className="w-48">
+        <Select
+          onValueChange={(v) => {
+            if (v === "delete") deleteAllData();
+            if (v === "apply") applyAllRules();
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Actions" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="apply">Apply All Rules</SelectItem>
+            <SelectItem value="delete">Delete All Data</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <h2 className="font-semibold">Rules</h2>
+        <div className="flex items-center gap-2">
+          <Input
+            className="w-48"
+            placeholder="Keyword"
+            value={newRule.keyword}
+            onChange={(e) => setNewRule({ ...newRule, keyword: e.target.value })}
+          />
+          <Select
+            value={newRule.category}
+            onValueChange={(v) => setNewRule({ ...newRule, category: v })}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Category" />
+            </SelectTrigger>
+            <SelectContent>
+              {categories.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <button className="px-2 py-1 border rounded" onClick={addRule}>
+            Add Rule
+          </button>
+        </div>
+        {rules.map((r, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            <Input
+              className="w-48"
+              value={r.keyword}
+              onChange={(e) => updateRule(idx, { keyword: e.target.value })}
+            />
+            <Select
+              value={r.category}
+              onValueChange={(v) => updateRule(idx, { category: v })}
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => applyRule(r)}
+            >
+              Apply
+            </button>
+            <button
+              className="px-2 py-1 border rounded"
+              onClick={() => deleteRule(idx)}
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+      {loading ? (
+        <div>Loading...</div>
+      ) : (
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table className="min-w-full border">
+            <thead className="bg-gray-100 sticky top-0">
+              <tr>
               <th
                 className="p-2 border cursor-pointer"
                 onClick={() => handleSort("transaction_date")}
@@ -250,6 +421,7 @@ function App() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
