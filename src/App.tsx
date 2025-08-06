@@ -39,6 +39,52 @@ interface Rule {
   category: string;
 }
 
+function RuleDialog({
+  open,
+  onOpenChange,
+  pendingRule,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pendingRule: Rule | null;
+  onConfirm: (apply: boolean) => void;
+}) {
+  const [applyToAll, setApplyToAll] = useState(false);
+
+  useEffect(() => {
+    if (open) setApplyToAll(false);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create Rule</DialogTitle>
+          <DialogDescription>
+            Map transactions containing "{pendingRule?.keyword}" to "
+            {pendingRule?.category}".
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="apply"
+            checked={applyToAll}
+            onCheckedChange={(v) => setApplyToAll(!!v)}
+          />
+          <Label htmlFor="apply">Apply to all existing transactions</Label>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={() => onConfirm(applyToAll)}>Create</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function App() {
   const [name, setName] = useState("");
   const [group, setGroup] = useState("");
@@ -52,7 +98,6 @@ function App() {
   const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
   const [pendingRule, setPendingRule] = useState<Rule | null>(null);
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
-  const [applyToAll, setApplyToAll] = useState(false);
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -183,7 +228,6 @@ function App() {
         label: "Create Rule",
         onClick: () => {
           setPendingRule({ keyword: tx.description, category });
-          setApplyToAll(false);
           setRuleDialogOpen(true);
         },
       },
@@ -247,12 +291,12 @@ function App() {
     await loadTransactions();
   }
 
-  function confirmRule() {
+  function confirmRule(applyAll: boolean) {
     if (!pendingRule) return;
     setRules([...rules, pendingRule]);
     if (!categories.includes(pendingRule.category))
       setCategories([...categories, pendingRule.category]);
-    if (applyToAll) applyRule(pendingRule);
+    if (applyAll) applyRule(pendingRule);
     setPendingRule(null);
     setRuleDialogOpen(false);
   }
@@ -449,34 +493,12 @@ function App() {
         </table>
       </div>
       )}
-      <Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create Rule</DialogTitle>
-            <DialogDescription>
-              Map transactions containing "{pendingRule?.keyword}" to "
-              {pendingRule?.category}".
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="apply"
-              checked={applyToAll}
-              onCheckedChange={(v) => setApplyToAll(!!v)}
-            />
-            <Label htmlFor="apply">Apply to all existing transactions</Label>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="secondary"
-              onClick={() => setRuleDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button onClick={confirmRule}>Create</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RuleDialog
+        open={ruleDialogOpen}
+        onOpenChange={setRuleDialogOpen}
+        pendingRule={pendingRule}
+        onConfirm={confirmRule}
+      />
     </div>
   );
 }
