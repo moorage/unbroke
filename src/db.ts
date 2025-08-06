@@ -17,6 +17,13 @@ export async function getDb() {
         memo TEXT
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword TEXT,
+        category TEXT
+      )
+    `);
   }
   return db;
 }
