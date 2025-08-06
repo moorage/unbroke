@@ -98,6 +98,8 @@ function App() {
   const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
   const [pendingRule, setPendingRule] = useState<Rule | null>(null);
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [action, setAction] = useState<string | undefined>(undefined);
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -253,7 +255,6 @@ function App() {
   }
 
   async function deleteAllData() {
-    if (!confirm("Delete all data?")) return;
     const db = await getDb();
     await db.execute("DELETE FROM transactions");
     setTransactions([]);
@@ -373,9 +374,11 @@ function App() {
       </div>
       <div className="w-48">
         <Select
+          value={action}
           onValueChange={async (v) => {
-            if (v === "delete") await deleteAllData();
+            if (v === "delete") setDeleteDialogOpen(true);
             if (v === "apply") await applyAllRules();
+            setAction(undefined);
           }}
         >
           <SelectTrigger>
@@ -511,6 +514,33 @@ function App() {
         </table>
       </div>
       )}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all data?</DialogTitle>
+            <DialogDescription>
+              This will permanently remove all transactions.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => setDeleteDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                await deleteAllData();
+                setDeleteDialogOpen(false);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <RuleDialog
         open={ruleDialogOpen}
         onOpenChange={setRuleDialogOpen}
