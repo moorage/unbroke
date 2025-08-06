@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Papa from "papaparse";
+import { Toaster, toast } from "sonner";
 import {
   Select,
   SelectTrigger,
@@ -8,6 +9,17 @@ import {
   SelectItem,
 } from "./components/ui/select";
 import { Input } from "./components/ui/input";
+import { Button } from "./components/ui/button";
+import { Checkbox } from "./components/ui/checkbox";
+import { Label } from "./components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "./components/ui/dialog";
 import { getDb } from "./db";
 import "./App.css";
 
@@ -33,10 +45,14 @@ function App() {
   const [groupTouched, setGroupTouched] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
-  const [newCategory, setNewCategory] = useState("");
+  const newCategoryRef = useRef<HTMLInputElement>(null);
+  const [action, setAction] = useState("");
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<Rule[]>([]);
   const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
+  const [pendingRule, setPendingRule] = useState<Rule | null>(null);
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
+  const [applyToAll, setApplyToAll] = useState(false);
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -151,16 +167,27 @@ function App() {
     await applyAllRules();
   }
 
-  async function updateCategory(id: number, category: string) {
+  async function updateCategory(tx: Transaction, category: string) {
     const db = await getDb();
     await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
       category,
-      id,
+      tx.id,
     ]);
     setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, category } : t))
+      prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
     );
     if (!categories.includes(category)) setCategories([...categories, category]);
+    toast("Create rule?", {
+      description: `Use "${tx.description}" for "${category}"?`,
+      action: {
+        label: "Create Rule",
+        onClick: () => {
+          setPendingRule({ keyword: tx.description, category });
+          setApplyToAll(false);
+          setRuleDialogOpen(true);
+        },
+      },
+    });
   }
 
   async function updateMemo(id: number, memo: string) {
@@ -175,11 +202,11 @@ function App() {
   }
 
   function addCategory() {
-    const cat = newCategory.trim();
+    const cat = newCategoryRef.current?.value.trim() || "";
     if (!cat) return;
     if (categories.some((c) => c.toLowerCase() === cat.toLowerCase())) return;
     setCategories([...categories, cat]);
-    setNewCategory("");
+    if (newCategoryRef.current) newCategoryRef.current.value = "";
   }
 
   async function deleteAllData() {
@@ -220,6 +247,16 @@ function App() {
     await loadTransactions();
   }
 
+  function confirmRule() {
+    if (!pendingRule) return;
+    setRules([...rules, pendingRule]);
+    if (!categories.includes(pendingRule.category))
+      setCategories([...categories, pendingRule.category]);
+    if (applyToAll) applyRule(pendingRule);
+    setPendingRule(null);
+    setRuleDialogOpen(false);
+  }
+
   function handleSort(column: keyof Transaction) {
     if (sortColumn === column) {
       setSortDesc(!sortDesc);
@@ -243,6 +280,7 @@ function App() {
 
   return (
     <div className="p-4 space-y-4">
+      <Toaster position="bottom-right" />
       <div className="space-y-2">
         <Input
           placeholder="Your name"
@@ -265,18 +303,17 @@ function App() {
         <Input
           className="w-48"
           placeholder="New category"
-          value={newCategory}
-          onChange={(e) => setNewCategory(e.target.value)}
+          ref={newCategoryRef}
         />
-        <button className="px-2 py-1 border rounded" onClick={addCategory}>
-          Add Category
-        </button>
+        <Button onClick={addCategory}>Add Category</Button>
       </div>
       <div className="w-48">
         <Select
+          value={action}
           onValueChange={(v) => {
             if (v === "delete") deleteAllData();
             if (v === "apply") applyAllRules();
+            setAction("");
           }}
         >
           <SelectTrigger>
@@ -312,9 +349,7 @@ function App() {
               ))}
             </SelectContent>
           </Select>
-          <button className="px-2 py-1 border rounded" onClick={addRule}>
-            Add Rule
-          </button>
+          <Button onClick={addRule}>Add Rule</Button>
         </div>
         {rules.map((r, idx) => (
           <div key={idx} className="flex items-center gap-2">
@@ -338,18 +373,10 @@ function App() {
                 ))}
               </SelectContent>
             </Select>
-            <button
-              className="px-2 py-1 border rounded"
-              onClick={() => applyRule(r)}
-            >
-              Apply
-            </button>
-            <button
-              className="px-2 py-1 border rounded"
-              onClick={() => deleteRule(idx)}
-            >
+            <Button onClick={() => applyRule(r)}>Apply</Button>
+            <Button variant="destructive" onClick={() => deleteRule(idx)}>
               Delete
-            </button>
+            </Button>
           </div>
         ))}
       </div>
@@ -396,7 +423,7 @@ function App() {
                 <td className="p-2 border w-48">
                   <Select
                     value={t.category}
-                    onValueChange={(v) => updateCategory(t.id!, v)}
+                    onValueChange={(v) => updateCategory(t, v)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select" />
@@ -422,6 +449,34 @@ function App() {
         </table>
       </div>
       )}
+      <Dialog open={ruleDialogOpen} onOpenChange={setRuleDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Rule</DialogTitle>
+            <DialogDescription>
+              Map transactions containing "{pendingRule?.keyword}" to "
+              {pendingRule?.category}".
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="apply"
+              checked={applyToAll}
+              onCheckedChange={(v) => setApplyToAll(!!v)}
+            />
+            <Label htmlFor="apply">Apply to all existing transactions</Label>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => setRuleDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmRule}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
