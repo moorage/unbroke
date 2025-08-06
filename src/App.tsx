@@ -35,6 +35,7 @@ interface Transaction {
 }
 
 interface Rule {
+  id?: number;
   keyword: string;
   category: string;
 }
@@ -92,12 +93,13 @@ function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const newCategoryRef = useRef<HTMLInputElement>(null);
-  const [action, setAction] = useState("");
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<Rule[]>([]);
   const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
   const [pendingRule, setPendingRule] = useState<Rule | null>(null);
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [action, setAction] = useState<string | undefined>(undefined);
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -106,18 +108,20 @@ function App() {
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
     const savedGroup = localStorage.getItem("group") || "";
-    const savedRules = JSON.parse(
-      localStorage.getItem("rules") || "[]"
-    ) as Rule[];
     if (savedName) setName(savedName);
     if (savedGroup) {
       setGroup(savedGroup);
       setGroupTouched(true);
     }
-    setRules(savedRules);
-    loadTransactions().then(() => {
-      if (savedRules.length) applyAllRules(savedRules);
-    });
+    (async () => {
+      const db = await getDb();
+      const savedRules = (await db.select<Rule[]>(
+        "SELECT id, keyword, category FROM rules"
+      )) as Rule[];
+      setRules(savedRules);
+      await loadTransactions();
+      if (savedRules.length) await applyAllRules(savedRules);
+    })();
   }, []);
 
   useEffect(() => {
@@ -135,9 +139,6 @@ function App() {
     localStorage.setItem("categories", JSON.stringify(categories));
   }, [categories]);
 
-  useEffect(() => {
-    localStorage.setItem("rules", JSON.stringify(rules));
-  }, [rules]);
 
   async function loadTransactions() {
     setLoading(true);
@@ -254,25 +255,39 @@ function App() {
   }
 
   async function deleteAllData() {
-    if (!confirm("Delete all data?")) return;
     const db = await getDb();
     await db.execute("DELETE FROM transactions");
     setTransactions([]);
   }
 
-  function addRule() {
+  async function addRule() {
     if (!newRule.keyword || !newRule.category) return;
-    setRules([...rules, newRule]);
+    const db = await getDb();
+    const res = await db.execute(
+      "INSERT INTO rules (keyword, category) VALUES (?, ?)",
+      [newRule.keyword, newRule.category]
+    );
+    const rule = { ...newRule, id: res.lastInsertId };
+    setRules([...rules, rule]);
     if (!categories.includes(newRule.category))
       setCategories([...categories, newRule.category]);
     setNewRule({ keyword: "", category: "" });
   }
 
-  function updateRule(index: number, update: Partial<Rule>) {
-    setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...update } : r)));
+  async function updateRule(index: number, update: Partial<Rule>) {
+    const updated = { ...rules[index], ...update };
+    const db = await getDb();
+    await db.execute(
+      "UPDATE rules SET keyword = ?, category = ? WHERE id = ?",
+      [updated.keyword, updated.category, updated.id]
+    );
+    setRules((prev) => prev.map((r, i) => (i === index ? updated : r)));
   }
 
-  function deleteRule(index: number) {
+  async function deleteRule(index: number) {
+    const rule = rules[index];
+    const db = await getDb();
+    await db.execute("DELETE FROM rules WHERE id = ?", [rule.id]);
     setRules((prev) => prev.filter((_, i) => i !== index));
   }
 
@@ -291,12 +306,18 @@ function App() {
     await loadTransactions();
   }
 
-  function confirmRule(applyAll: boolean) {
+  async function confirmRule(applyAll: boolean) {
     if (!pendingRule) return;
-    setRules([...rules, pendingRule]);
+    const db = await getDb();
+    const res = await db.execute(
+      "INSERT INTO rules (keyword, category) VALUES (?, ?)",
+      [pendingRule.keyword, pendingRule.category]
+    );
+    const rule = { ...pendingRule, id: res.lastInsertId };
+    setRules([...rules, rule]);
     if (!categories.includes(pendingRule.category))
       setCategories([...categories, pendingRule.category]);
-    if (applyAll) applyRule(pendingRule);
+    if (applyAll) await applyRule(rule);
     setPendingRule(null);
     setRuleDialogOpen(false);
   }
@@ -354,10 +375,10 @@ function App() {
       <div className="w-48">
         <Select
           value={action}
-          onValueChange={(v) => {
-            if (v === "delete") deleteAllData();
-            if (v === "apply") applyAllRules();
-            setAction("");
+          onValueChange={async (v) => {
+            if (v === "delete") setDeleteDialogOpen(true);
+            if (v === "apply") await applyAllRules();
+            setAction(undefined);
           }}
         >
           <SelectTrigger>
@@ -396,7 +417,7 @@ function App() {
           <Button onClick={addRule}>Add Rule</Button>
         </div>
         {rules.map((r, idx) => (
-          <div key={idx} className="flex items-center gap-2">
+          <div key={r.id ?? idx} className="flex items-center gap-2">
             <Input
               className="w-48"
               value={r.keyword}
@@ -493,6 +514,33 @@ function App() {
         </table>
       </div>
       )}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all data?</DialogTitle>
+            <DialogDescription>
+              This will permanently remove all transactions.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => setDeleteDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                await deleteAllData();
+                setDeleteDialogOpen(false);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <RuleDialog
         open={ruleDialogOpen}
         onOpenChange={setRuleDialogOpen}
