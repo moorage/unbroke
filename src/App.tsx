@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Papa from "papaparse";
+import { Toaster, toast } from "sonner";
 import {
   Select,
   SelectTrigger,
@@ -8,6 +9,17 @@ import {
   SelectItem,
 } from "./components/ui/select";
 import { Input } from "./components/ui/input";
+import { Button } from "./components/ui/button";
+import { Checkbox } from "./components/ui/checkbox";
+import { Label } from "./components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "./components/ui/dialog";
 import { getDb } from "./db";
 import "./App.css";
 
@@ -22,12 +34,70 @@ interface Transaction {
   memo: string;
 }
 
+interface Rule {
+  keyword: string;
+  category: string;
+}
+
+function RuleDialog({
+  open,
+  onOpenChange,
+  pendingRule,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pendingRule: Rule | null;
+  onConfirm: (apply: boolean) => void;
+}) {
+  const [applyToAll, setApplyToAll] = useState(false);
+
+  useEffect(() => {
+    if (open) setApplyToAll(false);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create Rule</DialogTitle>
+          <DialogDescription>
+            Map transactions containing "{pendingRule?.keyword}" to "
+            {pendingRule?.category}".
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="apply"
+            checked={applyToAll}
+            onCheckedChange={(v) => setApplyToAll(!!v)}
+          />
+          <Label htmlFor="apply">Apply to all existing transactions</Label>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={() => onConfirm(applyToAll)}>Create</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function App() {
   const [name, setName] = useState("");
   const [group, setGroup] = useState("");
   const [groupTouched, setGroupTouched] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const newCategoryRef = useRef<HTMLInputElement>(null);
+  const [action, setAction] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [newRule, setNewRule] = useState<Rule>({ keyword: "", category: "" });
+  const [pendingRule, setPendingRule] = useState<Rule | null>(null);
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
   const [sortColumn, setSortColumn] = useState<keyof Transaction>(
     "transaction_date"
   );
@@ -36,12 +106,18 @@ function App() {
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
     const savedGroup = localStorage.getItem("group") || "";
+    const savedRules = JSON.parse(
+      localStorage.getItem("rules") || "[]"
+    ) as Rule[];
     if (savedName) setName(savedName);
     if (savedGroup) {
       setGroup(savedGroup);
       setGroupTouched(true);
     }
-    loadTransactions();
+    setRules(savedRules);
+    loadTransactions().then(() => {
+      if (savedRules.length) applyAllRules(savedRules);
+    });
   }, []);
 
   useEffect(() => {
@@ -55,14 +131,29 @@ function App() {
     localStorage.setItem("group", group);
   }, [group]);
 
+  useEffect(() => {
+    localStorage.setItem("categories", JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem("rules", JSON.stringify(rules));
+  }, [rules]);
+
   async function loadTransactions() {
+    setLoading(true);
     const db = await getDb();
     const rows = (await db.select<Transaction[]>(
       "SELECT * FROM transactions ORDER BY transaction_date DESC"
     )) as Transaction[];
     setTransactions(rows);
-    const cats = Array.from(new Set(rows.map((r) => r.category).filter(Boolean)));
+    const savedCats = JSON.parse(
+      localStorage.getItem("categories") || "[]"
+    ) as string[];
+    const cats = Array.from(
+      new Set([...savedCats, ...rows.map((r) => r.category).filter(Boolean)])
+    );
     setCategories(cats);
+    setLoading(false);
   }
 
   function dedupe(records: Transaction[]): Transaction[] {
@@ -118,19 +209,29 @@ function App() {
         ]);
       }
     }
-    await loadTransactions();
+    await applyAllRules();
   }
 
-  async function updateCategory(id: number, category: string) {
+  async function updateCategory(tx: Transaction, category: string) {
     const db = await getDb();
     await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
       category,
-      id,
+      tx.id,
     ]);
     setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, category } : t))
+      prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
     );
     if (!categories.includes(category)) setCategories([...categories, category]);
+    toast("Create rule?", {
+      description: `Use "${tx.description}" for "${category}"?`,
+      action: {
+        label: "Create Rule",
+        onClick: () => {
+          setPendingRule({ keyword: tx.description, category });
+          setRuleDialogOpen(true);
+        },
+      },
+    });
   }
 
   async function updateMemo(id: number, memo: string) {
@@ -142,6 +243,62 @@ function App() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === id ? { ...t, memo } : t))
     );
+  }
+
+  function addCategory() {
+    const cat = newCategoryRef.current?.value.trim() || "";
+    if (!cat) return;
+    if (categories.some((c) => c.toLowerCase() === cat.toLowerCase())) return;
+    setCategories([...categories, cat]);
+    if (newCategoryRef.current) newCategoryRef.current.value = "";
+  }
+
+  async function deleteAllData() {
+    if (!confirm("Delete all data?")) return;
+    const db = await getDb();
+    await db.execute("DELETE FROM transactions");
+    setTransactions([]);
+  }
+
+  function addRule() {
+    if (!newRule.keyword || !newRule.category) return;
+    setRules([...rules, newRule]);
+    if (!categories.includes(newRule.category))
+      setCategories([...categories, newRule.category]);
+    setNewRule({ keyword: "", category: "" });
+  }
+
+  function updateRule(index: number, update: Partial<Rule>) {
+    setRules((prev) => prev.map((r, i) => (i === index ? { ...r, ...update } : r)));
+  }
+
+  function deleteRule(index: number) {
+    setRules((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function applyRule(rule: Rule) {
+    await applyAllRules([rule]);
+  }
+
+  async function applyAllRules(rulesToApply: Rule[] = rules) {
+    const db = await getDb();
+    for (const rule of rulesToApply) {
+      await db.execute(
+        "UPDATE transactions SET category = ? WHERE description LIKE ?",
+        [rule.category, `%${rule.keyword}%`]
+      );
+    }
+    await loadTransactions();
+  }
+
+  function confirmRule(applyAll: boolean) {
+    if (!pendingRule) return;
+    setRules([...rules, pendingRule]);
+    if (!categories.includes(pendingRule.category))
+      setCategories([...categories, pendingRule.category]);
+    if (applyAll) applyRule(pendingRule);
+    setPendingRule(null);
+    setRuleDialogOpen(false);
   }
 
   function handleSort(column: keyof Transaction) {
@@ -167,6 +324,7 @@ function App() {
 
   return (
     <div className="p-4 space-y-4">
+      <Toaster position="bottom-right" />
       <div className="space-y-2">
         <Input
           placeholder="Your name"
@@ -185,10 +343,94 @@ function App() {
       <div>
         <input type="file" accept=".csv" onChange={handleFile} />
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full border">
-          <thead>
-            <tr className="bg-gray-100">
+      <div className="flex items-center gap-2">
+        <Input
+          className="w-48"
+          placeholder="New category"
+          ref={newCategoryRef}
+        />
+        <Button onClick={addCategory}>Add Category</Button>
+      </div>
+      <div className="w-48">
+        <Select
+          value={action}
+          onValueChange={(v) => {
+            if (v === "delete") deleteAllData();
+            if (v === "apply") applyAllRules();
+            setAction("");
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Actions" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="apply">Apply All Rules</SelectItem>
+            <SelectItem value="delete">Delete All Data</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <h2 className="font-semibold">Rules</h2>
+        <div className="flex items-center gap-2">
+          <Input
+            className="w-48"
+            placeholder="Keyword"
+            value={newRule.keyword}
+            onChange={(e) => setNewRule({ ...newRule, keyword: e.target.value })}
+          />
+          <Select
+            value={newRule.category}
+            onValueChange={(v) => setNewRule({ ...newRule, category: v })}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Category" />
+            </SelectTrigger>
+            <SelectContent>
+              {categories.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button onClick={addRule}>Add Rule</Button>
+        </div>
+        {rules.map((r, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            <Input
+              className="w-48"
+              value={r.keyword}
+              onChange={(e) => updateRule(idx, { keyword: e.target.value })}
+            />
+            <Select
+              value={r.category}
+              onValueChange={(v) => updateRule(idx, { category: v })}
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => applyRule(r)}>Apply</Button>
+            <Button variant="destructive" onClick={() => deleteRule(idx)}>
+              Delete
+            </Button>
+          </div>
+        ))}
+      </div>
+      {loading ? (
+        <div>Loading...</div>
+      ) : (
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table className="min-w-full border">
+            <thead className="bg-gray-100 sticky top-0">
+              <tr>
               <th
                 className="p-2 border cursor-pointer"
                 onClick={() => handleSort("transaction_date")}
@@ -225,7 +467,7 @@ function App() {
                 <td className="p-2 border w-48">
                   <Select
                     value={t.category}
-                    onValueChange={(v) => updateCategory(t.id!, v)}
+                    onValueChange={(v) => updateCategory(t, v)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select" />
@@ -250,6 +492,13 @@ function App() {
           </tbody>
         </table>
       </div>
+      )}
+      <RuleDialog
+        open={ruleDialogOpen}
+        onOpenChange={setRuleDialogOpen}
+        pendingRule={pendingRule}
+        onConfirm={confirmRule}
+      />
     </div>
   );
 }
