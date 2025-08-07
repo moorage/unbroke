@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef, useMemo, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import Papa from "papaparse";
 import { Toaster, toast } from "sonner";
-import { listen } from '@tauri-apps/api/event';
+import { listen } from "@tauri-apps/api/event";
 import {
   Select,
   SelectTrigger,
@@ -23,7 +23,6 @@ import {
 } from "./components/ui/dialog";
 import { getDb } from "./db";
 import "./App.css";
-import TransactionsTable from "./components/TransactionsTable";
 
 interface Transaction {
   id?: number;
@@ -102,9 +101,8 @@ function App() {
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [action, setAction] = useState<string | undefined>(undefined);
-  const [sortColumn, setSortColumn] = useState<keyof Transaction>(
-    "transaction_date"
-  );
+  const [sortColumn, setSortColumn] =
+    useState<keyof Transaction>("transaction_date");
   const [sortDesc, setSortDesc] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -126,55 +124,69 @@ function App() {
       if (savedRules.length) await applyAllRules(savedRules);
     })();
 
-    console.log('Setting up Tauri v2 file drop listeners...');
+    console.log("Setting up Tauri v2 file drop listeners...");
 
     // Setup Tauri v2 file drop event listeners
     const setupTauriFileDropListeners = async () => {
       try {
-        const unlistenDragEnter = await listen('tauri://drag-enter', (event) => {
-          console.log('Tauri drag-enter event:', event);
-          setIsDragOver(true);
-        });
-
-        const unlistenDragOver = await listen('tauri://drag-over', (event) => {
-          console.log('Tauri drag-over event:', event);
-          setIsDragOver(true);
-        });
-
-        const unlistenDragLeave = await listen('tauri://drag-leave', (event) => {
-          console.log('Tauri drag-leave event:', event);
-          setIsDragOver(false);
-        });
-
-        const unlistenDrop = await listen('tauri://drag-drop', async (event) => {
-          console.log('Tauri drag-drop event:', event);
-          setIsDragOver(false);
-          
-          const payload = event.payload as { paths: string[]; position: { x: number; y: number } };
-          const filePaths = payload.paths;
-          console.log('Dropped file paths:', filePaths);
-          
-          const csvFile = filePaths.find(path => path.toLowerCase().endsWith('.csv'));
-          
-          if (csvFile) {
-            try {
-              console.log('Processing CSV file:', csvFile);
-              const { readTextFile } = await import('@tauri-apps/plugin-fs');
-              const text = await readTextFile(csvFile);
-              const fileName = csvFile.split('/').pop() || 'file.csv';
-              const file = new File([text], fileName, { type: 'text/csv' });
-              await processFile(file);
-              toast.success(`Imported ${fileName}`);
-            } catch (err) {
-              console.error('Error reading dropped file:', err);
-              toast.error('Error reading dropped file');
-            }
-          } else {
-            toast.error('Please drop a CSV file');
+        const unlistenDragEnter = await listen(
+          "tauri://drag-enter",
+          (event) => {
+            console.log("Tauri drag-enter event:", event);
+            setIsDragOver(true);
           }
+        );
+
+        const unlistenDragOver = await listen("tauri://drag-over", (event) => {
+          console.log("Tauri drag-over event:", event);
+          setIsDragOver(true);
         });
 
-        console.log('Tauri file drop listeners registered successfully');
+        const unlistenDragLeave = await listen(
+          "tauri://drag-leave",
+          (event) => {
+            console.log("Tauri drag-leave event:", event);
+            setIsDragOver(false);
+          }
+        );
+
+        const unlistenDrop = await listen(
+          "tauri://drag-drop",
+          async (event) => {
+            console.log("Tauri drag-drop event:", event);
+            setIsDragOver(false);
+
+            const payload = event.payload as {
+              paths: string[];
+              position: { x: number; y: number };
+            };
+            const filePaths = payload.paths;
+            console.log("Dropped file paths:", filePaths);
+
+            const csvFile = filePaths.find((path) =>
+              path.toLowerCase().endsWith(".csv")
+            );
+
+            if (csvFile) {
+              try {
+                console.log("Processing CSV file:", csvFile);
+                const { readTextFile } = await import("@tauri-apps/plugin-fs");
+                const text = await readTextFile(csvFile);
+                const fileName = csvFile.split("/").pop() || "file.csv";
+                const file = new File([text], fileName, { type: "text/csv" });
+                await processFile(file);
+                toast.success(`Imported ${fileName}`);
+              } catch (err) {
+                console.error("Error reading dropped file:", err);
+                toast.error("Error reading dropped file");
+              }
+            } else {
+              toast.error("Please drop a CSV file");
+            }
+          }
+        );
+
+        console.log("Tauri file drop listeners registered successfully");
 
         return () => {
           unlistenDragEnter();
@@ -183,13 +195,13 @@ function App() {
           unlistenDrop();
         };
       } catch (error) {
-        console.error('Error setting up Tauri file drop listeners:', error);
+        console.error("Error setting up Tauri file drop listeners:", error);
         return () => {};
       }
     };
 
     let cleanup: (() => void) | undefined;
-    setupTauriFileDropListeners().then(cleanupFn => {
+    setupTauriFileDropListeners().then((cleanupFn) => {
       cleanup = cleanupFn;
     });
 
@@ -212,84 +224,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem("categories", JSON.stringify(categories));
   }, [categories]);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    if ("__TAURI__" in window) {
-      (async () => {
-        unlisten = await getCurrentWindow().onDragDropEvent(
-          async (event: TauriEvent<DragDropEvent>) => {
-            console.log("tauri drag-drop", event.payload);
-            const type = event.payload.type;
-            if (type === "drop") {
-              setDragging(false);
-              const filePath = event.payload.paths?.[0];
-              console.log("tauri drop", filePath);
-              if (filePath) await processFile(filePath);
-            } else if (type === "enter" || type === "over") {
-              setDragging(true);
-            } else if (type === "leave") {
-              setDragging(false);
-            }
-          }
-        );
-      })();
-    }
-    return () => {
-      unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-      if (!dragging) console.log("dragover");
-      setDragging(true);
-    };
-    const handleDragEnter = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter.current++;
-      console.log("dragenter", dragCounter.current);
-      setDragging(true);
-    };
-    const handleDragLeave = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter.current--;
-      console.log("dragleave", dragCounter.current);
-      if (dragCounter.current <= 0) setDragging(false);
-    };
-    const handleDrop = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setDragging(false);
-      dragCounter.current = 0;
-      if (!("__TAURI__" in window)) {
-        const file = e.dataTransfer?.files?.[0];
-        if (file) {
-          console.log("drop", file.name);
-          processFile(file);
-        } else {
-          console.log("drop event without file");
-        }
-      }
-    };
-    const opts = { capture: true } as AddEventListenerOptions;
-    window.addEventListener("dragover", handleDragOver, opts);
-    window.addEventListener("dragenter", handleDragEnter, opts);
-    window.addEventListener("dragleave", handleDragLeave, opts);
-    window.addEventListener("drop", handleDrop, opts);
-    return () => {
-      window.removeEventListener("dragover", handleDragOver, opts);
-      window.removeEventListener("dragenter", handleDragEnter, opts);
-      window.removeEventListener("dragleave", handleDragLeave, opts);
-      window.removeEventListener("drop", handleDrop, opts);
-    };
-  }, []);
-
 
   async function loadTransactions() {
     setLoading(true);
@@ -316,6 +250,7 @@ function App() {
     }
     return Array.from(map.values());
   }
+
   async function processFile(file: File) {
     const text = await file.text();
     const parsed = Papa.parse(text, { header: true }).data as any[];
@@ -358,7 +293,6 @@ function App() {
         ]);
       }
     }
-    console.log("processed", unique.length, "transactions");
     await applyAllRules();
   }
 
@@ -371,16 +305,16 @@ function App() {
   function handleDragEnter(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    console.log('Drag enter detected');
+    console.log("Drag enter detected");
     setIsDragOver(true);
   }
 
   function handleDragOver(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    console.log('Drag over detected');
+    console.log("Drag over detected");
     if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = 'copy';
+      e.dataTransfer.dropEffect = "copy";
     }
     setIsDragOver(true);
   }
@@ -388,7 +322,7 @@ function App() {
   function handleDragLeave(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    console.log('Drag leave detected');
+    console.log("Drag leave detected");
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setIsDragOver(false);
   }
@@ -396,19 +330,21 @@ function App() {
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    console.log('Drop detected');
+    console.log("Drop detected");
     setIsDragOver(false);
-    
+
     const files = Array.from(e.dataTransfer.files);
-    console.log('Files dropped:', files);
-    const csvFile = files.find(file => file.type === 'text/csv' || file.name.endsWith('.csv'));
-    
+    console.log("Files dropped:", files);
+    const csvFile = files.find(
+      (file) => file.type === "text/csv" || file.name.endsWith(".csv")
+    );
+
     if (csvFile) {
-      console.log('Processing CSV file:', csvFile.name);
+      console.log("Processing CSV file:", csvFile.name);
       await processFile(csvFile);
       toast.success(`Imported ${csvFile.name}`);
     } else {
-      toast.error('Please drop a CSV file');
+      toast.error("Please drop a CSV file");
     }
   }
 
@@ -421,7 +357,8 @@ function App() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
     );
-    if (!categories.includes(category)) setCategories([...categories, category]);
+    if (!categories.includes(category))
+      setCategories([...categories, category]);
     toast("Create rule?", {
       description: `Use "${tx.description}" for "${category}"?`,
       action: {
@@ -432,35 +369,9 @@ function App() {
         },
       },
     });
-
   }
 
-  const updateCategory = useCallback(
-    async (tx: Transaction, category: string) => {
-      const db = await getDb();
-      await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
-        category,
-        tx.id,
-      ]);
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
-      );
-      if (!categories.includes(category)) setCategories([...categories, category]);
-      toast("Create rule?", {
-        description: `Use "${tx.description}" for "${category}"?`,
-        action: {
-          label: "Create Rule",
-          onClick: () => {
-            setPendingRule({ keyword: tx.description, category });
-            setRuleDialogOpen(true);
-          },
-        },
-      });
-    },
-    [categories]
-  );
-
-  const updateMemo = useCallback(async (id: number, memo: string) => {
+  async function updateMemo(id: number, memo: string) {
     const db = await getDb();
     await db.execute("UPDATE transactions SET memo = ? WHERE id = ?", [
       memo,
@@ -469,7 +380,7 @@ function App() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === id ? { ...t, memo } : t))
     );
-  }, []);
+  }
 
   function addCategory() {
     const cat = newCategoryRef.current?.value.trim() || "";
@@ -547,36 +458,28 @@ function App() {
     setRuleDialogOpen(false);
   }
 
-  const handleSort = useCallback(
-    (column: keyof Transaction) => {
-      if (sortColumn === column) {
-        setSortDesc(!sortDesc);
-      } else {
-        setSortColumn(column);
-        setSortDesc(column === "transaction_date");
-      }
-    },
-    [sortColumn, sortDesc]
-  );
+  function handleSort(column: keyof Transaction) {
+    if (sortColumn === column) {
+      setSortDesc(!sortDesc);
+    } else {
+      setSortColumn(column);
+      setSortDesc(column === "transaction_date");
+    }
+  }
 
-  const sortedTransactions = useMemo(() => {
-    return [...transactions].sort((a, b) => {
-      const dir = sortDesc ? -1 : 1;
-      const col = sortColumn;
-      if (col === "amount") return dir * (a.amount - b.amount);
-      if (col === "transaction_date" || col === "post_date")
-        return (
-          dir *
-          (new Date(a[col]).getTime() - new Date(b[col]).getTime())
-        );
-      return dir * String(a[col] ?? "").localeCompare(String(b[col] ?? ""));
-    });
-  }, [transactions, sortColumn, sortDesc]);
+  const sortedTransactions = [...transactions].sort((a, b) => {
+    const dir = sortDesc ? -1 : 1;
+    const col = sortColumn;
+    if (col === "amount") return dir * (a.amount - b.amount);
+    if (col === "transaction_date" || col === "post_date")
+      return dir * (new Date(a[col]).getTime() - new Date(b[col]).getTime());
+    return dir * String(a[col] ?? "").localeCompare(String(b[col] ?? ""));
+  });
 
   return (
-    <div 
+    <div
       className={`p-4 space-y-4 min-h-screen transition-colors ${
-        isDragOver ? 'bg-blue-50 border-2 border-dashed border-blue-300' : ''
+        isDragOver ? "bg-blue-50 border-2 border-dashed border-blue-300" : ""
       }`}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
@@ -602,7 +505,8 @@ function App() {
       <div className="space-y-2">
         <input type="file" accept=".csv" onChange={handleFile} />
         <p className="text-sm text-gray-500">
-          Or drag and drop a CSV file anywhere on this window {isDragOver && '(Drop detected!)'}
+          Or drag and drop a CSV file anywhere on this window{" "}
+          {isDragOver && "(Drop detected!)"}
         </p>
         <p className="text-xs text-gray-400">
           Check browser console for debug messages
@@ -641,7 +545,9 @@ function App() {
             className="w-48"
             placeholder="Keyword"
             value={newRule.keyword}
-            onChange={(e) => setNewRule({ ...newRule, keyword: e.target.value })}
+            onChange={(e) =>
+              setNewRule({ ...newRule, keyword: e.target.value })
+            }
           />
           <Select
             value={newRule.category}
@@ -691,16 +597,74 @@ function App() {
       </div>
       {loading ? (
         <div>Loading...</div>
-      ) : sortedTransactions.length ? (
-        <TransactionsTable
-          transactions={sortedTransactions}
-          categories={categories}
-          onSort={handleSort}
-          updateCategory={updateCategory}
-          updateMemo={updateMemo}
-        />
       ) : (
-        <div className="text-center text-gray-500">No transactions found</div>
+        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table className="min-w-full border">
+            <thead className="sticky top-0 bg-gray-100">
+              <tr>
+                <th
+                  className="p-2 border cursor-pointer"
+                  onClick={() => handleSort("transaction_date")}
+                >
+                  Date
+                </th>
+                <th
+                  className="p-2 border cursor-pointer"
+                  onClick={() => handleSort("description")}
+                >
+                  Description
+                </th>
+                <th
+                  className="p-2 text-right border cursor-pointer"
+                  onClick={() => handleSort("amount")}
+                >
+                  Amount
+                </th>
+                <th
+                  className="p-2 border cursor-pointer"
+                  onClick={() => handleSort("category")}
+                >
+                  Category
+                </th>
+                <th className="p-2 border">Memo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTransactions.map((t) => (
+                <tr key={t.id} className="border-t">
+                  <td className="p-2 border">{t.transaction_date}</td>
+                  <td className="p-2 border">{t.description}</td>
+                  <td className="p-2 text-right border">
+                    {t.amount.toFixed(2)}
+                  </td>
+                  <td className="w-48 p-2 border">
+                    <Select
+                      value={t.category}
+                      onValueChange={(v) => updateCategory(t, v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categories.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td className="w-64 p-2 border">
+                    <Input
+                      defaultValue={t.memo}
+                      onBlur={(e) => updateMemo(t.id!, e.target.value)}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
