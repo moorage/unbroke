@@ -105,6 +105,8 @@ function App() {
     "transaction_date"
   );
   const [sortDesc, setSortDesc] = useState(true);
+  const [dragging, setDragging] = useState(false);
+  const dragCounter = useRef(0);
 
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
@@ -218,8 +220,22 @@ function App() {
     await processFile(file);
   }
 
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragCounter.current++;
+    setDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragCounter.current--;
+    if (dragCounter.current === 0) setDragging(false);
+  };
+
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    setDragging(false);
+    dragCounter.current = 0;
     const file = e.dataTransfer.files?.[0];
     if (file) processFile(file);
   };
@@ -364,10 +380,17 @@ function App() {
 
   return (
     <div
-      className="p-4 space-y-4"
+      className="p-4 space-y-4 min-h-screen relative"
       onDragOver={(e) => e.preventDefault()}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {dragging && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 text-white text-2xl">
+          Drop CSV to add transactions
+        </div>
+      )}
       <Toaster position="bottom-right" />
       <div className="space-y-2">
         <Input
