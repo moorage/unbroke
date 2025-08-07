@@ -1,6 +1,10 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Papa from "papaparse";
 import { Toaster, toast } from "sonner";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
+import type { Event as TauriEvent } from "@tauri-apps/api/event";
 import {
   Select,
   SelectTrigger,
@@ -142,6 +146,31 @@ function App() {
     localStorage.setItem("categories", JSON.stringify(categories));
   }, [categories]);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    if ("__TAURI__" in window) {
+      (async () => {
+        unlisten = await getCurrentWindow().onDragDropEvent(
+          async (event: TauriEvent<DragDropEvent>) => {
+            const type = event.payload.type;
+            if (type === "drop") {
+              setDragging(false);
+              const filePath = event.payload.paths?.[0];
+              if (filePath) await processFile(filePath);
+            } else if (type === "enter" || type === "over") {
+              setDragging(true);
+            } else if (type === "leave") {
+              setDragging(false);
+            }
+          }
+        );
+      })();
+    }
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
 
   async function loadTransactions() {
     setLoading(true);
@@ -169,8 +198,11 @@ function App() {
     return Array.from(map.values());
   }
 
-  async function processFile(file: File) {
-    const text = await file.text();
+  async function processFile(file: File | string) {
+    const text =
+      typeof file === "string"
+        ? await (await fetch(convertFileSrc(file))).text()
+        : await file.text();
     const parsed = Papa.parse(text, { header: true }).data as any[];
     const recs: Transaction[] = [];
     parsed.forEach((row) => {
