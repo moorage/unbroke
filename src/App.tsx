@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Papa from "papaparse";
 import { Toaster, toast } from "sonner";
 import { listen } from '@tauri-apps/api/event';
@@ -23,6 +23,7 @@ import {
 } from "./components/ui/dialog";
 import { getDb } from "./db";
 import "./App.css";
+import TransactionsTable from "./components/TransactionsTable";
 
 interface Transaction {
   id?: number;
@@ -212,6 +213,83 @@ function App() {
     localStorage.setItem("categories", JSON.stringify(categories));
   }, [categories]);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    if ("__TAURI__" in window) {
+      (async () => {
+        unlisten = await getCurrentWindow().onDragDropEvent(
+          async (event: TauriEvent<DragDropEvent>) => {
+            console.log("tauri drag-drop", event.payload);
+            const type = event.payload.type;
+            if (type === "drop") {
+              setDragging(false);
+              const filePath = event.payload.paths?.[0];
+              console.log("tauri drop", filePath);
+              if (filePath) await processFile(filePath);
+            } else if (type === "enter" || type === "over") {
+              setDragging(true);
+            } else if (type === "leave") {
+              setDragging(false);
+            }
+          }
+        );
+      })();
+    }
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      if (!dragging) console.log("dragover");
+      setDragging(true);
+    };
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current++;
+      console.log("dragenter", dragCounter.current);
+      setDragging(true);
+    };
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current--;
+      console.log("dragleave", dragCounter.current);
+      if (dragCounter.current <= 0) setDragging(false);
+    };
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragging(false);
+      dragCounter.current = 0;
+      if (!("__TAURI__" in window)) {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) {
+          console.log("drop", file.name);
+          processFile(file);
+        } else {
+          console.log("drop event without file");
+        }
+      }
+    };
+    const opts = { capture: true } as AddEventListenerOptions;
+    window.addEventListener("dragover", handleDragOver, opts);
+    window.addEventListener("dragenter", handleDragEnter, opts);
+    window.addEventListener("dragleave", handleDragLeave, opts);
+    window.addEventListener("drop", handleDrop, opts);
+    return () => {
+      window.removeEventListener("dragover", handleDragOver, opts);
+      window.removeEventListener("dragenter", handleDragEnter, opts);
+      window.removeEventListener("dragleave", handleDragLeave, opts);
+      window.removeEventListener("drop", handleDrop, opts);
+    };
+  }, []);
+
 
   async function loadTransactions() {
     setLoading(true);
@@ -238,7 +316,6 @@ function App() {
     }
     return Array.from(map.values());
   }
-
   async function processFile(file: File) {
     const text = await file.text();
     const parsed = Papa.parse(text, { header: true }).data as any[];
@@ -281,6 +358,7 @@ function App() {
         ]);
       }
     }
+    console.log("processed", unique.length, "transactions");
     await applyAllRules();
   }
 
@@ -354,9 +432,35 @@ function App() {
         },
       },
     });
+
   }
 
-  async function updateMemo(id: number, memo: string) {
+  const updateCategory = useCallback(
+    async (tx: Transaction, category: string) => {
+      const db = await getDb();
+      await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
+        category,
+        tx.id,
+      ]);
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
+      );
+      if (!categories.includes(category)) setCategories([...categories, category]);
+      toast("Create rule?", {
+        description: `Use "${tx.description}" for "${category}"?`,
+        action: {
+          label: "Create Rule",
+          onClick: () => {
+            setPendingRule({ keyword: tx.description, category });
+            setRuleDialogOpen(true);
+          },
+        },
+      });
+    },
+    [categories]
+  );
+
+  const updateMemo = useCallback(async (id: number, memo: string) => {
     const db = await getDb();
     await db.execute("UPDATE transactions SET memo = ? WHERE id = ?", [
       memo,
@@ -365,7 +469,7 @@ function App() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === id ? { ...t, memo } : t))
     );
-  }
+  }, []);
 
   function addCategory() {
     const cat = newCategoryRef.current?.value.trim() || "";
@@ -443,26 +547,31 @@ function App() {
     setRuleDialogOpen(false);
   }
 
-  function handleSort(column: keyof Transaction) {
-    if (sortColumn === column) {
-      setSortDesc(!sortDesc);
-    } else {
-      setSortColumn(column);
-      setSortDesc(column === "transaction_date");
-    }
-  }
+  const handleSort = useCallback(
+    (column: keyof Transaction) => {
+      if (sortColumn === column) {
+        setSortDesc(!sortDesc);
+      } else {
+        setSortColumn(column);
+        setSortDesc(column === "transaction_date");
+      }
+    },
+    [sortColumn, sortDesc]
+  );
 
-  const sortedTransactions = [...transactions].sort((a, b) => {
-    const dir = sortDesc ? -1 : 1;
-    const col = sortColumn;
-    if (col === "amount") return dir * (a.amount - b.amount);
-    if (col === "transaction_date" || col === "post_date")
-      return (
-        dir *
-        (new Date(a[col]).getTime() - new Date(b[col]).getTime())
-      );
-    return dir * String(a[col] ?? "").localeCompare(String(b[col] ?? ""));
-  });
+  const sortedTransactions = useMemo(() => {
+    return [...transactions].sort((a, b) => {
+      const dir = sortDesc ? -1 : 1;
+      const col = sortColumn;
+      if (col === "amount") return dir * (a.amount - b.amount);
+      if (col === "transaction_date" || col === "post_date")
+        return (
+          dir *
+          (new Date(a[col]).getTime() - new Date(b[col]).getTime())
+        );
+      return dir * String(a[col] ?? "").localeCompare(String(b[col] ?? ""));
+    });
+  }, [transactions, sortColumn, sortDesc]);
 
   return (
     <div 
@@ -582,72 +691,16 @@ function App() {
       </div>
       {loading ? (
         <div>Loading...</div>
+      ) : sortedTransactions.length ? (
+        <TransactionsTable
+          transactions={sortedTransactions}
+          categories={categories}
+          onSort={handleSort}
+          updateCategory={updateCategory}
+          updateMemo={updateMemo}
+        />
       ) : (
-        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
-          <table className="min-w-full border">
-            <thead className="bg-gray-100 sticky top-0">
-              <tr>
-              <th
-                className="p-2 border cursor-pointer"
-                onClick={() => handleSort("transaction_date")}
-              >
-                Date
-              </th>
-              <th
-                className="p-2 border cursor-pointer"
-                onClick={() => handleSort("description")}
-              >
-                Description
-              </th>
-              <th
-                className="p-2 border cursor-pointer text-right"
-                onClick={() => handleSort("amount")}
-              >
-                Amount
-              </th>
-              <th
-                className="p-2 border cursor-pointer"
-                onClick={() => handleSort("category")}
-              >
-                Category
-              </th>
-              <th className="p-2 border">Memo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedTransactions.map((t) => (
-              <tr key={t.id} className="border-t">
-                <td className="p-2 border">{t.transaction_date}</td>
-                <td className="p-2 border">{t.description}</td>
-                <td className="p-2 border text-right">{t.amount.toFixed(2)}</td>
-                <td className="p-2 border w-48">
-                  <Select
-                    value={t.category}
-                    onValueChange={(v) => updateCategory(t, v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </td>
-                <td className="p-2 border w-64">
-                  <Input
-                    defaultValue={t.memo}
-                    onBlur={(e) => updateMemo(t.id!, e.target.value)}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        <div className="text-center text-gray-500">No transactions found</div>
       )}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
