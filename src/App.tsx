@@ -1,10 +1,7 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Papa from "papaparse";
 import { Toaster, toast } from "sonner";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { DragDropEvent } from "@tauri-apps/api/webview";
-import type { Event as TauriEvent } from "@tauri-apps/api/event";
+import { listen } from '@tauri-apps/api/event';
 import {
   Select,
   SelectTrigger,
@@ -109,8 +106,7 @@ function App() {
     "transaction_date"
   );
   const [sortDesc, setSortDesc] = useState(true);
-  const [dragging, setDragging] = useState(false);
-  const dragCounter = useRef(0);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
@@ -129,6 +125,77 @@ function App() {
       await loadTransactions();
       if (savedRules.length) await applyAllRules(savedRules);
     })();
+
+    console.log('Setting up Tauri v2 file drop listeners...');
+
+    // Setup Tauri v2 file drop event listeners
+    const setupTauriFileDropListeners = async () => {
+      try {
+        const unlistenDragEnter = await listen('tauri://drag-enter', (event) => {
+          console.log('Tauri drag-enter event:', event);
+          setIsDragOver(true);
+        });
+
+        const unlistenDragOver = await listen('tauri://drag-over', (event) => {
+          console.log('Tauri drag-over event:', event);
+          setIsDragOver(true);
+        });
+
+        const unlistenDragLeave = await listen('tauri://drag-leave', (event) => {
+          console.log('Tauri drag-leave event:', event);
+          setIsDragOver(false);
+        });
+
+        const unlistenDrop = await listen('tauri://drag-drop', async (event) => {
+          console.log('Tauri drag-drop event:', event);
+          setIsDragOver(false);
+          
+          const payload = event.payload as { paths: string[]; position: { x: number; y: number } };
+          const filePaths = payload.paths;
+          console.log('Dropped file paths:', filePaths);
+          
+          const csvFile = filePaths.find(path => path.toLowerCase().endsWith('.csv'));
+          
+          if (csvFile) {
+            try {
+              console.log('Processing CSV file:', csvFile);
+              const { readTextFile } = await import('@tauri-apps/plugin-fs');
+              const text = await readTextFile(csvFile);
+              const fileName = csvFile.split('/').pop() || 'file.csv';
+              const file = new File([text], fileName, { type: 'text/csv' });
+              await processFile(file);
+              toast.success(`Imported ${fileName}`);
+            } catch (err) {
+              console.error('Error reading dropped file:', err);
+              toast.error('Error reading dropped file');
+            }
+          } else {
+            toast.error('Please drop a CSV file');
+          }
+        });
+
+        console.log('Tauri file drop listeners registered successfully');
+
+        return () => {
+          unlistenDragEnter();
+          unlistenDragOver();
+          unlistenDragLeave();
+          unlistenDrop();
+        };
+      } catch (error) {
+        console.error('Error setting up Tauri file drop listeners:', error);
+        return () => {};
+      }
+    };
+
+    let cleanup: (() => void) | undefined;
+    setupTauriFileDropListeners().then(cleanupFn => {
+      cleanup = cleanupFn;
+    });
+
+    return () => {
+      if (cleanup) cleanup();
+    };
   }, []);
 
   useEffect(() => {
@@ -249,13 +316,8 @@ function App() {
     }
     return Array.from(map.values());
   }
-
-  async function processFile(file: File | string) {
-    console.log("processFile", typeof file === "string" ? file : file.name);
-    const text =
-      typeof file === "string"
-        ? await (await fetch(convertFileSrc(file))).text()
-        : await file.text();
+  async function processFile(file: File) {
+    const text = await file.text();
     const parsed = Papa.parse(text, { header: true }).data as any[];
     const recs: Transaction[] = [];
     parsed.forEach((row) => {
@@ -304,6 +366,73 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     await processFile(file);
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Drag enter detected');
+    setIsDragOver(true);
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Drag over detected');
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    setIsDragOver(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Drag leave detected');
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOver(false);
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Drop detected');
+    setIsDragOver(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    console.log('Files dropped:', files);
+    const csvFile = files.find(file => file.type === 'text/csv' || file.name.endsWith('.csv'));
+    
+    if (csvFile) {
+      console.log('Processing CSV file:', csvFile.name);
+      await processFile(csvFile);
+      toast.success(`Imported ${csvFile.name}`);
+    } else {
+      toast.error('Please drop a CSV file');
+    }
+  }
+
+  async function updateCategory(tx: Transaction, category: string) {
+    const db = await getDb();
+    await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
+      category,
+      tx.id,
+    ]);
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
+    );
+    if (!categories.includes(category)) setCategories([...categories, category]);
+    toast("Create rule?", {
+      description: `Use "${tx.description}" for "${category}"?`,
+      action: {
+        label: "Create Rule",
+        onClick: () => {
+          setPendingRule({ keyword: tx.description, category });
+          setRuleDialogOpen(true);
+        },
+      },
+    });
+
   }
 
   const updateCategory = useCallback(
@@ -445,12 +574,15 @@ function App() {
   }, [transactions, sortColumn, sortDesc]);
 
   return (
-    <div className="p-4 space-y-4 min-h-screen relative">
-      {dragging && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 text-white text-2xl">
-          Drop CSV to add transactions
-        </div>
-      )}
+    <div 
+      className={`p-4 space-y-4 min-h-screen transition-colors ${
+        isDragOver ? 'bg-blue-50 border-2 border-dashed border-blue-300' : ''
+      }`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <Toaster position="bottom-right" />
       <div className="space-y-2">
         <Input
@@ -467,8 +599,14 @@ function App() {
           }}
         />
       </div>
-      <div>
+      <div className="space-y-2">
         <input type="file" accept=".csv" onChange={handleFile} />
+        <p className="text-sm text-gray-500">
+          Or drag and drop a CSV file anywhere on this window {isDragOver && '(Drop detected!)'}
+        </p>
+        <p className="text-xs text-gray-400">
+          Check browser console for debug messages
+        </p>
       </div>
       <div className="flex items-center gap-2">
         <Input
