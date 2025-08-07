@@ -171,6 +171,39 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => e.preventDefault();
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current++;
+      setDragging(true);
+    };
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current--;
+      if (dragCounter.current === 0) setDragging(false);
+    };
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      dragCounter.current = 0;
+      if (!("__TAURI__" in window)) {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) processFile(file);
+      }
+    };
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+    return () => {
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, []);
+
 
   async function loadTransactions() {
     setLoading(true);
@@ -251,26 +284,6 @@ function App() {
     if (!file) return;
     await processFile(file);
   }
-
-  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragCounter.current++;
-    setDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragCounter.current--;
-    if (dragCounter.current === 0) setDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setDragging(false);
-    dragCounter.current = 0;
-    const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file);
-  };
 
   const updateCategory = useCallback(
     async (tx: Transaction, category: string) => {
@@ -411,13 +424,7 @@ function App() {
   }, [transactions, sortColumn, sortDesc]);
 
   return (
-    <div
-      className="p-4 space-y-4 min-h-screen relative"
-      onDragOver={(e) => e.preventDefault()}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
+    <div className="p-4 space-y-4 min-h-screen relative">
       {dragging && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 text-white text-2xl">
           Drop CSV to add transactions
