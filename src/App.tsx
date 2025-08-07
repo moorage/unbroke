@@ -152,10 +152,12 @@ function App() {
       (async () => {
         unlisten = await getCurrentWindow().onDragDropEvent(
           async (event: TauriEvent<DragDropEvent>) => {
+            console.log("tauri drag-drop", event.payload);
             const type = event.payload.type;
             if (type === "drop") {
               setDragging(false);
               const filePath = event.payload.paths?.[0];
+              console.log("tauri drop", filePath);
               if (filePath) await processFile(filePath);
             } else if (type === "enter" || type === "over") {
               setDragging(true);
@@ -172,35 +174,52 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handleDragOver = (e: DragEvent) => e.preventDefault();
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      if (!dragging) console.log("dragover");
+      setDragging(true);
+    };
     const handleDragEnter = (e: DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       dragCounter.current++;
+      console.log("dragenter", dragCounter.current);
       setDragging(true);
     };
     const handleDragLeave = (e: DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       dragCounter.current--;
-      if (dragCounter.current === 0) setDragging(false);
+      console.log("dragleave", dragCounter.current);
+      if (dragCounter.current <= 0) setDragging(false);
     };
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       setDragging(false);
       dragCounter.current = 0;
       if (!("__TAURI__" in window)) {
         const file = e.dataTransfer?.files?.[0];
-        if (file) processFile(file);
+        if (file) {
+          console.log("drop", file.name);
+          processFile(file);
+        } else {
+          console.log("drop event without file");
+        }
       }
     };
-    window.addEventListener("dragover", handleDragOver);
-    window.addEventListener("dragenter", handleDragEnter);
-    window.addEventListener("dragleave", handleDragLeave);
-    window.addEventListener("drop", handleDrop);
+    const opts = { capture: true } as AddEventListenerOptions;
+    window.addEventListener("dragover", handleDragOver, opts);
+    window.addEventListener("dragenter", handleDragEnter, opts);
+    window.addEventListener("dragleave", handleDragLeave, opts);
+    window.addEventListener("drop", handleDrop, opts);
     return () => {
-      window.removeEventListener("dragover", handleDragOver);
-      window.removeEventListener("dragenter", handleDragEnter);
-      window.removeEventListener("dragleave", handleDragLeave);
-      window.removeEventListener("drop", handleDrop);
+      window.removeEventListener("dragover", handleDragOver, opts);
+      window.removeEventListener("dragenter", handleDragEnter, opts);
+      window.removeEventListener("dragleave", handleDragLeave, opts);
+      window.removeEventListener("drop", handleDrop, opts);
     };
   }, []);
 
@@ -232,6 +251,7 @@ function App() {
   }
 
   async function processFile(file: File | string) {
+    console.log("processFile", typeof file === "string" ? file : file.name);
     const text =
       typeof file === "string"
         ? await (await fetch(convertFileSrc(file))).text()
@@ -276,6 +296,7 @@ function App() {
         ]);
       }
     }
+    console.log("processed", unique.length, "transactions");
     await applyAllRules();
   }
 
