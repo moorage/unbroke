@@ -21,6 +21,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "./components/ui/dialog";
+import { RadialMenu } from "./components/RadialMenu";
+import { RulesView } from "./components/RulesView";
 import { getDb } from "./db";
 import "./App.css";
 
@@ -122,6 +124,7 @@ function App() {
   const [applyRuleLoading, setApplyRuleLoading] = useState<number | null>(null);
   const [updateCategoryLoading, setUpdateCategoryLoading] = useState<number | null>(null);
   const [createRuleLoading, setCreateRuleLoading] = useState(false);
+  const [currentView, setCurrentView] = useState<'transactions' | 'rules'>('transactions');
 
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
@@ -404,14 +407,12 @@ function App() {
     );
   }
 
-  async function addCategory() {
-    const cat = newCategoryRef.current?.value.trim() || "";
-    if (!cat) return;
-    if (categories.some((c) => c.toLowerCase() === cat.toLowerCase())) return;
+  async function addCategory(category: string) {
+    if (!category.trim()) return;
+    if (categories.some((c) => c.toLowerCase() === category.toLowerCase())) return;
     setAddCategoryLoading(true);
     try {
-      setCategories([...categories, cat]);
-      if (newCategoryRef.current) newCategoryRef.current.value = "";
+      setCategories([...categories, category]);
     } finally {
       setAddCategoryLoading(false);
     }
@@ -421,6 +422,12 @@ function App() {
     const db = await getDb();
     await db.execute("DELETE FROM transactions");
     setTransactions([]);
+  }
+
+  async function deleteAllRules() {
+    const db = await getDb();
+    await db.execute("DELETE FROM rules");
+    setRules([]);
   }
 
   async function addRule() {
@@ -529,7 +536,7 @@ function App() {
 
   return (
     <div
-      className={`p-4 space-y-4 min-h-screen transition-colors ${
+      className={`h-screen overflow-hidden transition-colors ${
         isDragOver ? "bg-blue-50 border-2 border-dashed border-blue-300" : ""
       }`}
       onDragEnter={handleDragEnter}
@@ -538,131 +545,54 @@ function App() {
       onDrop={handleDrop}
     >
       <Toaster position="bottom-right" />
-      <div className="space-y-2">
-        <Input
-          placeholder="Your name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          placeholder="Group name"
-          value={group}
-          onChange={(e) => {
-            setGroupTouched(true);
-            setGroup(e.target.value);
-          }}
-        />
-      </div>
-      <div className="space-y-2">
-        <input type="file" accept=".csv" onChange={handleFile} />
-        <p className="text-sm text-gray-500">
-          Or drag and drop a CSV file anywhere on this window{" "}
-          {isDragOver && "(Drop detected!)"}
-        </p>
-        <p className="text-xs text-gray-400">
-          Check browser console for debug messages
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <Input
-          className="w-48"
-          placeholder="New category"
-          ref={newCategoryRef}
-        />
-        <Button onClick={addCategory} disabled={addCategoryLoading}>
-          {addCategoryLoading ? "Adding..." : "Add Category"}
-        </Button>
-      </div>
-      <div className="w-48">
-        <Select
-          value={action}
-          onValueChange={async (v) => {
-            if (v === "delete") setDeleteDialogOpen(true);
-            if (v === "apply") await applyAllRules();
-            setAction(undefined);
-          }}
-          disabled={applyAllRulesLoading}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Actions" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="apply">
-              {applyAllRulesLoading ? "Applying Rules..." : "Apply All Rules"}
-            </SelectItem>
-            <SelectItem value="delete">Delete All Data</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="space-y-2">
-        <h2 className="font-semibold">Rules</h2>
-        <div className="flex items-center gap-2">
-          <Input
-            className="w-48"
-            placeholder="Keyword"
-            value={newRule.keyword}
-            onChange={(e) =>
-              setNewRule({ ...newRule, keyword: e.target.value })
-            }
-          />
-          <Select
-            value={newRule.category}
-            onValueChange={(v) => setNewRule({ ...newRule, category: v })}
-          >
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="Category" />
-            </SelectTrigger>
-            <SelectContent>
-              {categories.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button onClick={addRule} disabled={addRuleLoading}>
-            {addRuleLoading ? "Adding..." : "Add Rule"}
-          </Button>
-        </div>
-        {rules.map((r, idx) => (
-          <div key={r.id ?? idx} className="flex items-center gap-2">
-            <Input
-              className="w-48"
-              value={r.keyword}
-              onChange={(e) => updateRule(idx, { keyword: e.target.value })}
-            />
-            <Select
-              value={r.category}
-              onValueChange={(v) => updateRule(idx, { category: v })}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button 
-              onClick={() => applyRule(r, idx)} 
-              disabled={applyRuleLoading === idx}
-            >
-              {applyRuleLoading === idx ? "Applying..." : "Apply"}
-            </Button>
-            <Button variant="destructive" onClick={() => deleteRule(idx)}>
-              Delete
-            </Button>
+      <RadialMenu
+        name={name}
+        group={group}
+        onNameChange={(newName) => setName(newName)}
+        onGroupChange={(newGroup) => {
+          setGroupTouched(true);
+          setGroup(newGroup);
+        }}
+        onFileUpload={handleFile}
+        onDeleteAllData={() => setDeleteDialogOpen(true)}
+        categories={categories}
+        onAddCategory={addCategory}
+        addCategoryLoading={addCategoryLoading}
+        rules={rules}
+        onApplyAllRules={applyAllRules}
+        onDeleteAllRules={deleteAllRules}
+        applyAllRulesLoading={applyAllRulesLoading}
+        onNavigateToRules={() => setCurrentView('rules')}
+      />
+      
+      {isDragOver && (
+        <div className="fixed inset-0 bg-blue-50 bg-opacity-90 border-2 border-dashed border-blue-300 flex items-center justify-center z-40">
+          <div className="text-2xl text-blue-600 font-semibold">
+            Drop CSV file to import transactions
           </div>
-        ))}
-      </div>
-      {loading ? (
+        </div>
+      )}
+
+      {currentView === 'rules' ? (
+        <RulesView
+          rules={rules}
+          categories={categories}
+          newRule={newRule}
+          setNewRule={setNewRule}
+          onAddRule={addRule}
+          onUpdateRule={updateRule}
+          onDeleteRule={deleteRule}
+          onApplyRule={applyRule}
+          onGoBack={() => setCurrentView('transactions')}
+          addRuleLoading={addRuleLoading}
+          applyRuleLoading={applyRuleLoading}
+        />
+      ) : (
+        loading ? (
         <div>Loading...</div>
       ) : (
-        <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
-          <table className="min-w-full border">
+        <div className="h-full p-2 overflow-x-auto overflow-y-auto">
+          <table className="w-full border">
             <thead className="sticky top-0 bg-gray-100">
               <tr>
                 <th
@@ -729,6 +659,7 @@ function App() {
             </tbody>
           </table>
         </div>
+        )
       )}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
