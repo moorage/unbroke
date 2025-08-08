@@ -46,11 +46,13 @@ function RuleDialog({
   onOpenChange,
   pendingRule,
   onConfirm,
+  loading,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pendingRule: Rule | null;
   onConfirm: (apply: boolean) => void;
+  loading: boolean;
 }) {
   const [applyToAll, setApplyToAll] = useState(false);
 
@@ -77,10 +79,19 @@ function RuleDialog({
           <Label htmlFor="apply">Apply to all existing transactions</Label>
         </div>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button 
+            variant="secondary" 
+            onClick={() => onOpenChange(false)}
+            disabled={loading}
+          >
             Cancel
           </Button>
-          <Button onClick={() => onConfirm(applyToAll)}>Create</Button>
+          <Button 
+            onClick={() => onConfirm(applyToAll)}
+            disabled={loading}
+          >
+            {loading ? "Creating..." : "Create"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -105,6 +116,12 @@ function App() {
     useState<keyof Transaction>("transaction_date");
   const [sortDesc, setSortDesc] = useState(true);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [addCategoryLoading, setAddCategoryLoading] = useState(false);
+  const [applyAllRulesLoading, setApplyAllRulesLoading] = useState(false);
+  const [addRuleLoading, setAddRuleLoading] = useState(false);
+  const [applyRuleLoading, setApplyRuleLoading] = useState<number | null>(null);
+  const [updateCategoryLoading, setUpdateCategoryLoading] = useState<number | null>(null);
+  const [createRuleLoading, setCreateRuleLoading] = useState(false);
 
   useEffect(() => {
     const savedName = localStorage.getItem("name") || "";
@@ -349,26 +366,31 @@ function App() {
   }
 
   async function updateCategory(tx: Transaction, category: string) {
-    const db = await getDb();
-    await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
-      category,
-      tx.id,
-    ]);
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
-    );
-    if (!categories.includes(category))
-      setCategories([...categories, category]);
-    toast("Create rule?", {
-      description: `Use "${tx.description}" for "${category}"?`,
-      action: {
-        label: "Create Rule",
-        onClick: () => {
-          setPendingRule({ keyword: tx.description, category });
-          setRuleDialogOpen(true);
+    setUpdateCategoryLoading(tx.id!);
+    try {
+      const db = await getDb();
+      await db.execute("UPDATE transactions SET category = ? WHERE id = ?", [
+        category,
+        tx.id,
+      ]);
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === tx.id ? { ...t, category } : t))
+      );
+      if (!categories.includes(category))
+        setCategories([...categories, category]);
+      toast("Create rule?", {
+        description: `Use "${tx.description}" for "${category}"?`,
+        action: {
+          label: "Create Rule",
+          onClick: () => {
+            setPendingRule({ keyword: tx.description, category });
+            setRuleDialogOpen(true);
+          },
         },
-      },
-    });
+      });
+    } finally {
+      setUpdateCategoryLoading(null);
+    }
   }
 
   async function updateMemo(id: number, memo: string) {
@@ -382,12 +404,17 @@ function App() {
     );
   }
 
-  function addCategory() {
+  async function addCategory() {
     const cat = newCategoryRef.current?.value.trim() || "";
     if (!cat) return;
     if (categories.some((c) => c.toLowerCase() === cat.toLowerCase())) return;
-    setCategories([...categories, cat]);
-    if (newCategoryRef.current) newCategoryRef.current.value = "";
+    setAddCategoryLoading(true);
+    try {
+      setCategories([...categories, cat]);
+      if (newCategoryRef.current) newCategoryRef.current.value = "";
+    } finally {
+      setAddCategoryLoading(false);
+    }
   }
 
   async function deleteAllData() {
@@ -398,16 +425,21 @@ function App() {
 
   async function addRule() {
     if (!newRule.keyword || !newRule.category) return;
-    const db = await getDb();
-    const res = await db.execute(
-      "INSERT INTO rules (keyword, category) VALUES (?, ?)",
-      [newRule.keyword, newRule.category]
-    );
-    const rule = { ...newRule, id: res.lastInsertId };
-    setRules([...rules, rule]);
-    if (!categories.includes(newRule.category))
-      setCategories([...categories, newRule.category]);
-    setNewRule({ keyword: "", category: "" });
+    setAddRuleLoading(true);
+    try {
+      const db = await getDb();
+      const res = await db.execute(
+        "INSERT INTO rules (keyword, category) VALUES (?, ?)",
+        [newRule.keyword, newRule.category]
+      );
+      const rule = { ...newRule, id: res.lastInsertId };
+      setRules([...rules, rule]);
+      if (!categories.includes(newRule.category))
+        setCategories([...categories, newRule.category]);
+      setNewRule({ keyword: "", category: "" });
+    } finally {
+      setAddRuleLoading(false);
+    }
   }
 
   async function updateRule(index: number, update: Partial<Rule>) {
@@ -427,35 +459,54 @@ function App() {
     setRules((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function applyRule(rule: Rule) {
-    await applyAllRules([rule]);
+  async function applyRule(rule: Rule, ruleIndex: number) {
+    setApplyRuleLoading(ruleIndex);
+    try {
+      await applyAllRules([rule]);
+    } finally {
+      setApplyRuleLoading(null);
+    }
   }
 
   async function applyAllRules(rulesToApply: Rule[] = rules) {
-    const db = await getDb();
-    for (const rule of rulesToApply) {
-      await db.execute(
-        "UPDATE transactions SET category = ? WHERE description LIKE ?",
-        [rule.category, `%${rule.keyword}%`]
-      );
+    if (rulesToApply === rules) {
+      setApplyAllRulesLoading(true);
     }
-    await loadTransactions();
+    try {
+      const db = await getDb();
+      for (const rule of rulesToApply) {
+        await db.execute(
+          "UPDATE transactions SET category = ? WHERE description LIKE ?",
+          [rule.category, `%${rule.keyword}%`]
+        );
+      }
+      await loadTransactions();
+    } finally {
+      if (rulesToApply === rules) {
+        setApplyAllRulesLoading(false);
+      }
+    }
   }
 
   async function confirmRule(applyAll: boolean) {
     if (!pendingRule) return;
-    const db = await getDb();
-    const res = await db.execute(
-      "INSERT INTO rules (keyword, category) VALUES (?, ?)",
-      [pendingRule.keyword, pendingRule.category]
-    );
-    const rule = { ...pendingRule, id: res.lastInsertId };
-    setRules([...rules, rule]);
-    if (!categories.includes(pendingRule.category))
-      setCategories([...categories, pendingRule.category]);
-    if (applyAll) await applyRule(rule);
-    setPendingRule(null);
-    setRuleDialogOpen(false);
+    setCreateRuleLoading(true);
+    try {
+      const db = await getDb();
+      const res = await db.execute(
+        "INSERT INTO rules (keyword, category) VALUES (?, ?)",
+        [pendingRule.keyword, pendingRule.category]
+      );
+      const rule = { ...pendingRule, id: res.lastInsertId };
+      setRules([...rules, rule]);
+      if (!categories.includes(pendingRule.category))
+        setCategories([...categories, pendingRule.category]);
+      if (applyAll) await applyAllRules([rule]);
+      setPendingRule(null);
+      setRuleDialogOpen(false);
+    } finally {
+      setCreateRuleLoading(false);
+    }
   }
 
   function handleSort(column: keyof Transaction) {
@@ -518,7 +569,9 @@ function App() {
           placeholder="New category"
           ref={newCategoryRef}
         />
-        <Button onClick={addCategory}>Add Category</Button>
+        <Button onClick={addCategory} disabled={addCategoryLoading}>
+          {addCategoryLoading ? "Adding..." : "Add Category"}
+        </Button>
       </div>
       <div className="w-48">
         <Select
@@ -528,12 +581,15 @@ function App() {
             if (v === "apply") await applyAllRules();
             setAction(undefined);
           }}
+          disabled={applyAllRulesLoading}
         >
           <SelectTrigger>
             <SelectValue placeholder="Actions" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="apply">Apply All Rules</SelectItem>
+            <SelectItem value="apply">
+              {applyAllRulesLoading ? "Applying Rules..." : "Apply All Rules"}
+            </SelectItem>
             <SelectItem value="delete">Delete All Data</SelectItem>
           </SelectContent>
         </Select>
@@ -564,7 +620,9 @@ function App() {
               ))}
             </SelectContent>
           </Select>
-          <Button onClick={addRule}>Add Rule</Button>
+          <Button onClick={addRule} disabled={addRuleLoading}>
+            {addRuleLoading ? "Adding..." : "Add Rule"}
+          </Button>
         </div>
         {rules.map((r, idx) => (
           <div key={r.id ?? idx} className="flex items-center gap-2">
@@ -588,7 +646,12 @@ function App() {
                 ))}
               </SelectContent>
             </Select>
-            <Button onClick={() => applyRule(r)}>Apply</Button>
+            <Button 
+              onClick={() => applyRule(r, idx)} 
+              disabled={applyRuleLoading === idx}
+            >
+              {applyRuleLoading === idx ? "Applying..." : "Apply"}
+            </Button>
             <Button variant="destructive" onClick={() => deleteRule(idx)}>
               Delete
             </Button>
@@ -641,6 +704,7 @@ function App() {
                     <Select
                       value={t.category}
                       onValueChange={(v) => updateCategory(t, v)}
+                      disabled={updateCategoryLoading === t.id}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select" />
@@ -698,6 +762,7 @@ function App() {
         onOpenChange={setRuleDialogOpen}
         pendingRule={pendingRule}
         onConfirm={confirmRule}
+        loading={createRuleLoading}
       />
     </div>
   );
